@@ -25,7 +25,6 @@ else:
 
 
 
-from django.db.backends.postgresql_psycopg2.creation import DatabaseCreation as Psycopg2DatabaseCreation
 POOL_SETTINGS = 'DATABASE_POOL_ARGS'
 
 # DATABASE_POOL_ARGS should be something like:
