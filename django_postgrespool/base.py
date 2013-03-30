@@ -7,12 +7,25 @@ from sqlalchemy import event
 from sqlalchemy.pool import manage, QueuePool
 from psycopg2 import InterfaceError, ProgrammingError, OperationalError
 
+from django import VERSION as DJANGO_VERSION
 from django.conf import settings
 from django.db.backends.postgresql_psycopg2.base import *
 from django.db.backends.postgresql_psycopg2.base import DatabaseWrapper as Psycopg2DatabaseWrapper
 from django.db.backends.postgresql_psycopg2.base import CursorWrapper as DjangoCursorWrapper
-from django.db.backends.postgresql_psycopg2.creation import DatabaseCreation as Psycopg2DatabaseCreation
 
+
+if DJANGO_VERSION < (1, 4):
+    from django.db.backends.postgresql.creation import DatabaseCreation as Psycopg2DatabaseCreation
+    from .postgresql_version import get_version
+    from django.db.backends.postgresql_psycopg2.base import DatabaseOperations as Psycopg2DatabaseOperations
+else:
+    from django.db.backends.postgresql_psycopg2.creation import DatabaseCreation as Psycopg2DatabaseCreation
+    from django.db.backends.postgresql_psycopg2.version import get_version
+    from django.db.backends.postgresql_psycopg2.operations import DatabaseOperations as Psycopg2DatabaseOperations
+
+
+
+from django.db.backends.postgresql_psycopg2.creation import DatabaseCreation as Psycopg2DatabaseCreation
 POOL_SETTINGS = 'DATABASE_POOL_ARGS'
 
 # DATABASE_POOL_ARGS should be something like:
@@ -100,18 +113,35 @@ class DatabaseCreation(Psycopg2DatabaseCreation):
         super(DatabaseCreation, self).destroy_test_db(*args, **kw)
 
 
+class DatabaseOperations(Psycopg2DatabaseOperations):
+
+    def set_time_zone_sql(self):
+        """Backwards compatibility for django 1.3"""
+        return "SET TIME ZONE %s"
+
+
+
 class DatabaseWrapper(Psycopg2DatabaseWrapper):
     """SQLAlchemy FTW."""
 
     def __init__(self, *args, **kwargs):
         super(DatabaseWrapper, self).__init__(*args, **kwargs)
+        self.ops = DatabaseOperations(self)
         self.creation = DatabaseCreation(self)
+        self._pg_version = None
+
+    def _get_pg_version(self):
+        """Backwards compatibility for django 1.3"""
+        if self._pg_version is None:
+            self._pg_version = get_version(self.connection)
+        return self._pg_version
+    pg_version = property(_get_pg_version)
 
     def _cursor(self):
         if self.connection is None:
             self.connection = db_pool.connect(**self._get_conn_params())
             self.connection.set_client_encoding('UTF8')
-            tz = 'UTC' if settings.USE_TZ else self.settings_dict.get('TIME_ZONE')
+            tz = 'UTC' if getattr(settings, 'USE_TZ', False) else self.settings_dict.get('TIME_ZONE')
             if tz:
                 try:
                     get_parameter_status = self.connection.get_parameter_status
@@ -131,7 +161,8 @@ class DatabaseWrapper(Psycopg2DatabaseWrapper):
             self._get_pg_version()
             connection_created.send(sender=self.__class__, connection=self)
         cursor = self.connection.cursor()
-        cursor.tzinfo_factory = utc_tzinfo_factory if settings.USE_TZ else None
+        cursor.tzinfo_factory = utc_tzinfo_factory if getattr(settings, 'USE_TZ', False) else None
+
         return CursorWrapper(cursor, self.connection)
 
     def _dispose(self):
